@@ -5715,7 +5715,7 @@ int main() {
         if safe:
           cmd += ['-sSAFE_HEAP']
         if emulate_casts:
-          cmd += ['-sEMULATE_FUNCTION_POINTER_CASTS']
+          cmd += ['-sEMULATE_FUNCTION_POINTER_CASTS', '-Wno-deprecated']
         if relocatable:
           cmd += ['-sRELOCATABLE'] # disables asm-optimized safe heap
         print(cmd)
@@ -7040,7 +7040,7 @@ int main(void) {
     self.run_process([EMCC, test_file('hello_world.c'), '-sMODULARIZE', '-sEXPORT_NAME=Foo'])
     create_file('run.js', 'var m = require("./a.out.js"); new m();')
     err = self.run_js('run.js', assert_returncode=NON_ZERO)
-    self.assertContained('Error: Foo() should not be called with `new Foo()`', err)
+    self.assertContained('TypeError: m is not a constructor', err)
 
   @parameterized({
     '': ([],),
@@ -9081,17 +9081,23 @@ int main() {
     for not_exists in expected_not_exists:
       self.assertNotIn(not_exists, sent)
 
-    # measure the wasm size without the name section
-    building.strip('a.out.wasm', 'a.out.nodebug.wasm', sections=['name'])
-    wasm_size = os.path.getsize('a.out.nodebug.wasm')
-    size_file = expected_basename + '.size'
     js_size = os.path.getsize('a.out.js')
     gz_size = get_file_gzipped_size('a.out.js')
     js_size_file = expected_basename + '.jssize'
     gz_size_file = expected_basename + '.gzsize'
-    self.check_expected_size_in_file('wasm', size_file, wasm_size)
     self.check_expected_size_in_file('js', js_size_file, js_size)
     self.check_expected_size_in_file('gz', gz_size_file, gz_size)
+
+    if '-sSINGLE_FILE' in args:
+      # No wasm file in the final output so we skip the rest of the
+      # testing
+      return
+
+    # measure the wasm size without the name section
+    building.strip('a.out.wasm', 'a.out.nodebug.wasm', sections=['name'])
+    wasm_size = os.path.getsize('a.out.nodebug.wasm')
+    size_file = expected_basename + '.size'
+    self.check_expected_size_in_file('wasm', size_file, wasm_size)
 
     imports, exports, funcs = self.parse_wasm('a.out.wasm')
     # Deminify the imports/export lists, if minification occured
@@ -9189,14 +9195,14 @@ int main() {
     'Os': (['-Os'], [], []),
     'Oz': (['-Oz'], [], []),
     # finally, check what happens when we export nothing. wasm should be almost empty
-    'export_nothing':
-          (['-Os', '-sEXPORTED_FUNCTIONS=[]'],    [], []), # noqa
+    'export_nothing': (['-Os', '-sEXPORTED_FUNCTIONS=[]'], [], []),
     # we don't metadce with linkable code! other modules may want stuff
     # TODO(sbc): Investivate why the number of exports is order of magnitude
     # larger for wasm backend.
-    'dylink': (['-O3', '-sMAIN_MODULE=2'], [], []), # noqa
+    'dylink': (['-O3', '-sMAIN_MODULE=2'], [], []),
     # WasmFS should not be fully linked into a hello world program.
-    'wasmfs': (['-O3', '-sWASMFS'],        [], []), # noqa
+    'wasmfs': (['-O3', '-sWASMFS'], [], []),
+    'single_file': (['-O3', '-sSINGLE_FILE'], [], []), # noqa
   })
   def test_codesize_hello(self, *args):
     self.run_codesize_test('hello_world.c', *args)
@@ -12488,7 +12494,7 @@ Aborted(`Module.arguments` has been replaced by `arguments_` (the initial value 
         }
       }
     ''')
-    self.do_runf('src.c', 'ok\ndone\n', emcc_args=['-sEMULATE_FUNCTION_POINTER_CASTS'])
+    self.do_runf('src.c', 'ok\ndone\n', emcc_args=['-Wno-deprecated', '-sEMULATE_FUNCTION_POINTER_CASTS'])
 
   def test_no_lto(self):
     # This used to fail because settings.LTO didn't reflect `-fno-lto`.
@@ -15861,7 +15867,10 @@ addToLibrary({
     copytree(test_file('rollup_node'), '.')
     self.run_process([EMCC, test_file('hello_world.c'), '-sEXPORT_ES6', '-sEXIT_RUNTIME', '-sENVIRONMENT=node', '-sMODULARIZE', '-o', 'hello.mjs'])
     self.run_process(shared.get_npm_cmd('rollup') + ['--config'])
-    self.assertContained('hello, world!', self.run_js('bundle.mjs'))
+    # Rollup doesn't bundle the wasm file by default so we need to copy it
+    # TODO(sbc): Look into plugins that do bundling.
+    shutil.copy('hello.wasm', 'dist/')
+    self.assertContained('hello, world!', self.run_js('dist/bundle.mjs'))
 
   def test_rlimit(self):
     self.do_other_test('test_rlimit.c', emcc_args=['-O1'])

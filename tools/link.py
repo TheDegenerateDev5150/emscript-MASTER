@@ -799,17 +799,17 @@ def phase_linker_setup(options, linker_args):  # noqa: C901, PLR0912, PLR0915
     # to js.
     settings.WASM = 1
     settings.WASM2JS = 1
-    # Wasm bigint doesn't make sense with wasm2js, since it controls how the
-    # wasm and JS interact.
-    if user_settings.get('WASM_BIGINT') and settings.WASM_BIGINT:
-      exit_with_error('WASM_BIGINT=1 is not compatible with WASM=0 (wasm2js)')
-    settings.WASM_BIGINT = 0
-    feature_matrix.disable_feature(feature_matrix.Feature.JS_BIGINT_INTEGRATION)
+
   if settings.WASM == 2:
     # Requesting both Wasm and Wasm2JS support
     settings.WASM2JS = 1
+
+  if settings.WASM2JS:
+    settings.MAYBE_WASM2JS = 1
+    # Wasm bigint doesn't make sense with wasm2js, since it controls how the
+    # wasm and JS interact.
     if user_settings.get('WASM_BIGINT') and settings.WASM_BIGINT:
-      exit_with_error('WASM_BIGINT=1 is not compatible with WASM=2 (wasm2js)')
+      exit_with_error('WASM_BIGINT=1 is not compatible with wasm2js')
     settings.WASM_BIGINT = 0
     feature_matrix.disable_feature(feature_matrix.Feature.JS_BIGINT_INTEGRATION)
 
@@ -1523,9 +1523,6 @@ def phase_linker_setup(options, linker_args):  # noqa: C901, PLR0912, PLR0915
 
   if options.use_closure_compiler == 2 and not settings.WASM2JS:
     exit_with_error('closure compiler mode 2 assumes the code is asm.js, so not meaningful for wasm')
-
-  if settings.WASM2JS:
-    settings.MAYBE_WASM2JS = 1
 
   if settings.AUTODEBUG:
     settings.REQUIRED_EXPORTS += ['_emscripten_tempret_set']
@@ -2468,19 +2465,6 @@ var %(EXPORT_NAME)s = (() => {
         'script_url_node': script_url_node,
         'wrapper_function': wrapper_function,
       }
-
-  if settings.ASSERTIONS and settings.MODULARIZE != 'instance':
-    src += '''\
-(() => {
-  // Create a small, never-async wrapper around %(EXPORT_NAME)s which
-  // checks for callers incorrectly using it with `new`.
-  var real_%(EXPORT_NAME)s = %(EXPORT_NAME)s;
-  %(EXPORT_NAME)s = function(arg) {
-    if (new.target) throw new Error("%(EXPORT_NAME)s() should not be called with `new %(EXPORT_NAME)s()`");
-    return real_%(EXPORT_NAME)s(arg);
-  }
-})();
-''' % {'EXPORT_NAME': settings.EXPORT_NAME}
 
   if settings.SOURCE_PHASE_IMPORTS:
     src = f"import source wasmModule from './{settings.WASM_BINARY_FILE}';\n\n" + src
