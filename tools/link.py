@@ -516,9 +516,6 @@ def setup_pthreads():
     '_emscripten_thread_crashed',
   ]
 
-  if settings.EMBIND:
-    settings.REQUIRED_EXPORTS.append('_embind_initialize_bindings')
-
   if settings.MAIN_MODULE:
     settings.REQUIRED_EXPORTS += [
       '_emscripten_dlsync_self',
@@ -1381,6 +1378,11 @@ def phase_linker_setup(options, linker_args):  # noqa: C901, PLR0912, PLR0915
     # Workaround for embind+LTO issue:
     # https://github.com/emscripten-core/emscripten/issues/21653
     settings.REQUIRED_EXPORTS.append('__getTypeName')
+    if settings.PTHREADS or settings.WASM_WORKERS:
+      settings.REQUIRED_EXPORTS.append('_embind_initialize_bindings')
+    # Needed to assign the embind exports to the ES exports.
+    if settings.MODULARIZE == 'instance':
+      settings.DEFAULT_LIBRARY_FUNCS_TO_INCLUDE += ['$addOnPostCtor']
 
   if options.emit_tsd:
     settings.EMIT_TSD = True
@@ -1422,15 +1424,7 @@ def phase_linker_setup(options, linker_args):  # noqa: C901, PLR0912, PLR0915
 
   if settings.AUDIO_WORKLET:
     add_system_js_lib('libwebaudio.js')
-    if not settings.MINIMAL_RUNTIME:
-      # If we are in the audio worklet environment, we can only access the Module object
-      # and not the global scope of the main JS script. Therefore we need to export
-      # all symbols that the audio worklet scope needs onto the Module object.
-      # MINIMAL_RUNTIME exports these manually, since this export mechanism is placed
-      # in global scope that is not suitable for MINIMAL_RUNTIME loader.
-      settings.EXPORTED_RUNTIME_METHODS += ['stackSave', 'stackAlloc', 'stackRestore', 'wasmTable']
-      # The following symbols need exposing to load and bootstrap the audio worklet:
-      settings.INCOMING_MODULE_JS_API += ['instantiateWasm', 'wasm', 'wasmMemory']
+    settings.DEFAULT_LIBRARY_FUNCS_TO_INCLUDE.append('$getWasmTableEntry')
 
   if not settings.MINIMAL_RUNTIME:
     if 'preRun' in settings.INCOMING_MODULE_JS_API:
@@ -2062,9 +2056,22 @@ def phase_emit_tsd(options, wasm_target, js_target, js_syms, metadata):
 def phase_embind_aot(options, wasm_target, js_syms):
   out = run_embind_gen(options, wasm_target, js_syms, {})
   if DEBUG:
-    write_file(in_temp('embind_aot.js'), out)
+    write_file(in_temp('embind_aot.json'), out)
+  out = json.loads(out)
   src = read_file(final_js)
-  src = do_replace(src, '<<< EMBIND_AOT_OUTPUT >>>', out)
+  src = do_replace(src, '<<< EMBIND_AOT_INVOKERS >>>', out['invokers'])
+  if settings.MODULARIZE == 'instance':
+    # Add ES module exports for the embind exports.
+    decls = '\n'.join([f'export var {name};' for name in out['publicSymbols']])
+    # Assign the runtime exports from Module to the ES export.
+    assigns = '\n'.join([f'{name} = Module[\'{name}\'];' for name in out['publicSymbols']])
+    exports = f'''
+// start embind exports
+function assignEmbindExports() {{ {assigns} }};
+addOnPostCtor(assignEmbindExports);
+{decls}
+// end embind exports'''
+    src += exports
   write_file(final_js, src)
 
 
@@ -2108,22 +2115,6 @@ def fix_es6_import_statements(js_file):
              .replace('EMSCRIPTEN$AWAIT(createWasm())', 'await createWasm()')
              .replace('EMSCRIPTEN$AWAIT(', 'await ('))
   save_intermediate('es6-module')
-
-
-def create_worker_file(input_file, target_dir, output_file, options):
-  output_file = os.path.join(target_dir, output_file)
-  input_file = utils.path_from_root(input_file)
-  contents = building.read_and_preprocess(input_file, expand_macros=True)
-  write_file(output_file, contents)
-
-  fix_es6_import_statements(output_file)
-
-  # Minify the worker JS file, if JS minification is enabled.
-  if settings.MINIFY_WHITESPACE:
-    contents = building.acorn_optimizer(output_file, ['--minify-whitespace'], return_output=True, worker_js=True)
-    write_file(output_file, contents)
-
-  utils.convert_line_endings_in_file(output_file, options.output_eol)
 
 
 def create_esm_wrapper(wrapper_file, support_target, wasm_target):
@@ -2170,13 +2161,6 @@ def phase_final_emitting(options, target, js_target, wasm_target):
 
   if shared.SKIP_SUBPROCS:
     return
-
-  target_dir = os.path.dirname(os.path.abspath(target))
-
-  # Deploy the Audio Worklet module bootstrap file (*.aw.js)
-  if settings.AUDIO_WORKLET:
-    audio_worklet_file = unsuffixed_basename(js_target) + '.aw.js'
-    create_worker_file('src/audio_worklet.js', target_dir, audio_worklet_file, options)
 
   if settings.MODULARIZE and settings.MODULARIZE != 'instance':
     modularize()
@@ -2496,15 +2480,6 @@ var %(EXPORT_NAME)s = (() => {
   if settings.SOURCE_PHASE_IMPORTS:
     src = f"import source wasmModule from './{settings.WASM_BINARY_FILE}';\n\n" + src
 
-  # Given the async nature of how the Module function and Module object
-  # come into existence in AudioWorkletGlobalScope, store the Module
-  # function under a different variable name so that AudioWorkletGlobalScope
-  # will be able to reference it without aliasing/conflicting with the
-  # Module variable name. This should happen even in MINIMAL_RUNTIME builds
-  # for MODULARIZE and EXPORT_ES6 to work correctly.
-  if settings.AUDIO_WORKLET:
-    src += f'globalThis.AudioWorkletModule = {settings.EXPORT_NAME};\n'
-
   # Export using a UMD style export, or ES6 exports if selected
   if settings.EXPORT_ES6:
     src += 'export default %s;\n' % settings.EXPORT_NAME
@@ -2552,6 +2527,8 @@ if (typeof exports === 'object' && typeof module === 'object') {
         src += f'if (isNode) isWW = {node_ww_detection()}\n'
     elif settings.ENVIRONMENT_MAY_BE_NODE:
       src += f'var isWW = {node_ww_detection()}\n'
+    if settings.AUDIO_WORKLET:
+      src += "isWW ||= typeof AudioWorkletGlobalScope !== 'undefined';\n"
     src += '// When running as a wasm worker, construct a new instance on startup\n'
     if settings.MODULARIZE == 'instance':
       src += 'isWW && init();\n'

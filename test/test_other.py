@@ -920,7 +920,7 @@ f.close()
   @no_windows('Skipped on Windows because CMake does not configure native Clang builds well on Windows.')
   @parameterized({
     '': ([],),
-    'force': (['-DEMSCRIPTEN_FORCE_COMPILERS=ON'],),
+    'noforce': (['-DEMSCRIPTEN_FORCE_COMPILERS=OFF'],),
   })
   def test_cmake_compile_features(self, args):
     os.mkdir('build_native')
@@ -979,7 +979,7 @@ f.close()
   @crossplatform
   @parameterized({
     '': ([],),
-    'force': (['-DEMSCRIPTEN_FORCE_COMPILERS=ON'],),
+    'noforce': (['-DEMSCRIPTEN_FORCE_COMPILERS=OFF'],),
   })
   def test_cmake_compile_commands(self, args):
     self.run_process([EMCMAKE, 'cmake', test_file('cmake/static_lib'), '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'] + args)
@@ -2320,7 +2320,7 @@ Module['postRun'] = () => {
     ''')
     self.emcc('side2.c', ['-fPIC', '-sSIDE_MODULE', '-olibside2.so'])
     self.emcc('side1.c', ['-fPIC', '-sSIDE_MODULE', '-olibside1.so', 'libside2.so'])
-    cmd = [EMCC, 'main.c', '-fPIC', '-sMAIN_MODULE=2', 'libside1.so']
+    cmd = [EMCC, 'main.c', '-fPIC', '-sMAIN_MODULE=2', '-sDYLINK_DEBUG', 'libside1.so']
 
     # Unless `.` is added to the library path the libside2.so won't be found.
     err = self.expect_fail(cmd)
@@ -2360,7 +2360,7 @@ Module['postRun'] = () => {
     ''')
     self.emcc('side2.c', ['-fPIC', '-sSIDE_MODULE', '-olibside2.so'])
     self.emcc('side1.c', ['-fPIC', '-sSIDE_MODULE', '-Wl,-rpath,$ORIGIN', '-olibside1.so', 'libside2.so'])
-    cmd = [EMCC, 'main.c', '-fPIC', '-sMAIN_MODULE=2', 'libside1.so']
+    cmd = [EMCC, 'main.c', '-fPIC', '-sMAIN_MODULE=2', '-sDYLINK_DEBUG', 'libside1.so']
 
     # Unless `.` is added to the library path the libside2.so won't be found.
     err = self.expect_fail(cmd)
@@ -2469,6 +2469,7 @@ F1 -> ''
   def test_sdl2_mixer_wav(self):
     self.emcc(test_file('browser/test_sdl2_mixer_wav.c'), ['-sUSE_SDL_MIXER=2'], output_filename='a.out.js')
     self.emcc(test_file('browser/test_sdl2_mixer_wav.c'), ['--use-port=sdl2_mixer'], output_filename='a.out.js')
+    self.emcc(test_file('browser/test_sdl2_mixer_wav.c'), ['--use-port=sdl2_mixer:formats=ogg'], output_filename='a.out.js')
 
   def test_sdl2_linkable(self):
     # Ensure that SDL2 can be built with LINKABLE.  This implies there are no undefined
@@ -3307,6 +3308,15 @@ More info: https://emscripten.org
     self.do_runf('main.cpp', '10\nok\n',
                  emcc_args=['--no-entry', '-lembind', '-O2', '--closure=1', '--minify=0', '--post-js=post.js'])
 
+  @parameterized({
+    'val_1': ['embind/test_embind_no_raw_pointers_val_1.cpp'],
+    'val_2': ['embind/test_embind_no_raw_pointers_val_2.cpp'],
+    'val_3': ['embind/test_embind_no_raw_pointers_val_3.cpp'],
+  })
+  def test_embind_no_raw_pointers(self, filename):
+    stderr = self.expect_fail([EMCC, '-lembind', test_file(filename)])
+    self.assertContained('Implicitly binding raw pointers is illegal.', stderr)
+
   @is_slow_test
   @parameterized({
     '': [],
@@ -3337,7 +3347,7 @@ More info: https://emscripten.org
       '-Wno-deprecated-declarations',
       '-lembind',
       '-sRETAIN_COMPILER_SETTINGS',
-      '-sEXPORTED_RUNTIME_METHODS=getCompilerSetting,setDelayFunction,flushPendingDeletes,PureVirtualError,HEAP8',
+      '-sEXPORTED_RUNTIME_METHODS=getCompilerSetting,setDelayFunction,flushPendingDeletes,PureVirtualError,HEAP8,InternalError,BindingError,count_emval_handles',
       '-sWASM_ASYNC_COMPILATION=0',
       # This test uses a `CustomSmartPtr` class which has 1MB of data embedded in
       # it which means we need more stack space than normal.
@@ -3385,14 +3395,6 @@ More info: https://emscripten.org
     self.emcc_args += ['-lembind']
 
     self.do_runf('embind/test_return_value_policy.cpp')
-
-  @parameterized({
-    '': [[]],
-    'asyncify': [['-sASYNCIFY=1']],
-  })
-  def test_embind_long_long(self, args):
-    self.do_runf('embind/test_embind_long_long.cpp', '1000000000000n\n-1000000000000n',
-                 emcc_args=['-lembind', '-sWASM_BIGINT'] + args)
 
   @requires_node_canary
   def test_embind_resource_management(self):
@@ -3572,7 +3574,7 @@ More info: https://emscripten.org
     args = [EMXX, test_file('other/embind_tsgen_bigint.cpp'), '-lembind', '--emit-tsd', 'embind_tsgen_bigint.d.ts']
     # Check that TypeScript generation fails when code contains bigints but their support is not enabled
     stderr = self.expect_fail(args + ['-sWASM_BIGINT=0'])
-    self.assertContained("Missing primitive type to TS type for 'int64_t", stderr)
+    self.assertContained("Missing primitive type to TS type for 'long long", stderr)
     # Check that TypeScript generation works when bigint support is enabled
     self.run_process(args)
     self.assertFileContents(test_file('other/embind_tsgen_bigint.d.ts'), read_file('embind_tsgen_bigint.d.ts'))
@@ -11802,9 +11804,6 @@ int main () {
       return ' ({:+.2f}%)'.format((actual - expected) * 100.0 / expected)
 
     outputs = ['a.html', 'a.js']
-    if '-sAUDIO_WORKLET' in sources:
-      outputs += ['a.aw.js']
-
     args = smallest_code_size_args[:]
 
     if wasm2js:
@@ -13410,7 +13409,9 @@ exec "$@"
   def test_post_link(self):
     err = self.run_process([EMCC, test_file('hello_world.c'), '--oformat=bare', '-o', 'bare.wasm'], stderr=PIPE).stderr
     self.assertContained('--oformat=bare/--post-link are experimental and subject to change', err)
-    err = self.run_process([EMCC, '--post-link', 'bare.wasm'], stderr=PIPE).stderr
+    # Explicitly test with `-s RUNTIME_DEBUG`, including the space, to verify parsing of `-s` flags
+    # See https://github.com/emscripten-core/emscripten/issues/24250
+    err = self.run_process([EMCC, '--post-link', 'bare.wasm', '-s', 'RUNTIME_DEBUG'], stderr=PIPE).stderr
     self.assertContained('--oformat=bare/--post-link are experimental and subject to change', err)
     err = self.assertContained('hello, world!', self.run_js('a.out.js'))
 
@@ -14591,15 +14592,14 @@ int main() {
     else:
       self.run_process([EMCC, test_file('hello_world.c'), '-Werror'] + args)
 
-  @parameterized({
-    '': [[]],
-    'trusted': [['-sTRUSTED_TYPES']],
-  })
-  def test_wasm_worker_hello(self, args):
-    self.do_runf('wasm_worker/hello_wasm_worker.c', emcc_args=['-sWASM_WORKERS'] + args)
+  def test_wasm_worker_trusted_types(self):
+    self.do_run_in_out_file_test('wasm_worker/hello_wasm_worker.c', emcc_args=['-sWASM_WORKERS', '-sTRUSTED_TYPES'])
 
   def test_wasm_worker_terminate(self):
     self.do_runf('wasm_worker/terminate_wasm_worker.c', emcc_args=['-sWASM_WORKERS'])
+
+  def test_wasm_worker_dbg(self):
+    self.do_run_in_out_file_test('wasm_worker/test_wasm_worker_dbg.c', emcc_args=['-sWASM_WORKERS'])
 
   @also_with_minimal_runtime
   def test_wasm_worker_closure(self):
@@ -16053,4 +16053,29 @@ addToLibrary({
     msg = 'randomFill not supported on d8 unless --enable-os-system is passed'
     self.do_runf('main.c', msg, assert_returncode=1)
     self.v8_args += ['--enable-os-system']
+    self.do_runf('main.c')
+
+  def test_em_js_bool_macro_expansion(self):
+    # Normally macros like `true` and `false` are not expanded inside
+    # of `EM_JS` or `EM_ASM` blocks.  However, in the case then an
+    # additional macro later is added these will be expanded and we want
+    # to make sure the resulting expansion doesn't break the expectations
+    # of JS code.
+    create_file('main.c', '''
+      #include <emscripten.h>
+
+      #define EM_JS_MACROS(ret, func_name, args, body...)    \
+        EM_JS(ret, func_name, args, body)
+
+      EM_JS_MACROS(void, check_bool_type, (void), {
+        if (typeof true !== "boolean") {
+          throw new Error("typeof true is " + typeof true + " not boolean");
+        }
+      })
+
+      int main() {
+        check_bool_type();
+        return 0;
+      }
+    ''')
     self.do_runf('main.c')

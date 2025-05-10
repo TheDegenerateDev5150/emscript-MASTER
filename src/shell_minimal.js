@@ -51,10 +51,6 @@ var ENVIRONMENT_IS_NODE = typeof process == 'object' && process.type != 'rendere
 var ENVIRONMENT_IS_SHELL = typeof read == 'function';
 #endif
 
-#if AUDIO_WORKLET
-var ENVIRONMENT_IS_AUDIO_WORKLET = typeof AudioWorkletGlobalScope !== 'undefined';
-#endif
-
 #if ASSERTIONS || PTHREADS
 #if !ENVIRONMENT_MAY_BE_NODE && !ENVIRONMENT_MAY_BE_SHELL
 var ENVIRONMENT_IS_WEB = true
@@ -88,6 +84,11 @@ if (ENVIRONMENT_IS_NODE) {
 #endif
 #endif
 
+#if AUDIO_WORKLET
+var ENVIRONMENT_IS_AUDIO_WORKLET = typeof AudioWorkletGlobalScope !== 'undefined';
+if (ENVIRONMENT_IS_AUDIO_WORKLET) ENVIRONMENT_IS_WASM_WORKER = true;
+#endif
+
 #if ASSERTIONS && ENVIRONMENT_MAY_BE_NODE && ENVIRONMENT_MAY_BE_SHELL
 if (ENVIRONMENT_IS_NODE && ENVIRONMENT_IS_SHELL) {
   throw 'unclear environment';
@@ -116,8 +117,8 @@ if (ENVIRONMENT_IS_NODE) {
 var out = defaultPrint;
 var err = defaultPrintErr;
 #else
-var out = (text) => console.log(text);
-var err = (text) => console.error(text);
+var out = (...args) => console.log(...args);
+var err = (...args) => console.error(...args);
 #endif
 
 // Override this function in a --pre-js file to get a signal for when

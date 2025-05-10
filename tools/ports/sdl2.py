@@ -20,6 +20,12 @@ def get_lib_name(settings):
   return 'libSDL2' + ('-mt' if settings.PTHREADS else '') + '.a'
 
 
+def process_dependencies(settings, cflags_only):
+  if not cflags_only:
+    # SDL2 includes an internal reference to Module['createContext']
+    settings.EXPORTED_RUNTIME_METHODS.append('createContext')
+
+
 def get(ports, settings, shared):
   # get the port
   ports.fetch_project('sdl2', f'https://github.com/libsdl-org/SDL/archive/{TAG}.zip', sha512hash=HASH)
@@ -70,7 +76,8 @@ def get(ports, settings, shared):
     srcs += ['thread/%s/%s' % (thread_backend, s) for s in thread_srcs]
 
     srcs = [os.path.join(src_dir, 'src', s) for s in srcs]
-    flags = ['-sUSE_SDL=0']
+    # TODO: Remove fwrapv when we update to a version which includes https://github.com/libsdl-org/SDL/pull/12581
+    flags = ['-sUSE_SDL=0', '-fwrapv-pointer']
     includes = [ports.get_include_dir('SDL2')]
     if settings.PTHREADS:
       flags += ['-pthread']
