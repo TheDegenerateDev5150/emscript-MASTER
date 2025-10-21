@@ -1084,8 +1084,6 @@ class RunnerCore(RetryableTestCase, metaclass=RunnerMeta):
       self.skipTest('dynamic linking not supported with llvm-libc')
     if self.is_wasm2js():
       self.skipTest('dynamic linking not supported with wasm2js')
-    if '-fsanitize=undefined' in self.cflags:
-      self.skipTest('dynamic linking not supported with UBSan')
     # MEMORY64=2 mode doesn't currently support dynamic linking because
     # The side modules are lowered to wasm32 when they are built, making
     # them unlinkable with wasm64 binaries.
@@ -1439,11 +1437,11 @@ class RunnerCore(RetryableTestCase, metaclass=RunnerMeta):
 
         left_over_files = set(temp_files_after_run) - set(self.temp_files_before_run)
         left_over_files = [f for f in left_over_files if not any(f.startswith(p) for p in ignorable_file_prefixes)]
-        if len(left_over_files):
-          errlog('ERROR: After running test, there are ' + str(len(left_over_files)) + ' new temporary files/directories left behind:')
+        if left_over_files:
+          errlog(f'ERROR: After running test, there are {len(left_over_files)} new temporary files/directories left behind:')
           for f in left_over_files:
             errlog('leaked file: ', f)
-          self.fail('Test leaked ' + str(len(left_over_files)) + ' temporary files!')
+          self.fail(f'Test leaked {len(left_over_files)} temporary files!')
 
   def get_setting(self, key, default=None):
     return self.settings_mods.get(key, default)
